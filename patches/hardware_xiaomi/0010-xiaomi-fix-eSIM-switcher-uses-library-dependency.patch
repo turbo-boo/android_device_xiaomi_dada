@@ -1,0 +1,18 @@
+From 20ea7c1fdf847a0bfc986c1ca19eca56154f7d29 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Wed, 15 Jul 2026 22:15:34 +0900
+Subject: [PATCH 10/14] xiaomi: fix eSIM switcher uses-library dependency
+
+
+diff --git a/packages/EsimSwitcher/Android.bp b/packages/EsimSwitcher/Android.bp
+index 12f0236..dc5999e 100644
+--- a/packages/EsimSwitcher/Android.bp
++++ b/packages/EsimSwitcher/Android.bp
+@@ -22,6 +22,6 @@ android_app {
+         "SettingsLib",
+     ],
+     uses_libs: [
+-        "com.qti.extphone.extphonelib",
++        "extphonelib",
+     ],
+ }
