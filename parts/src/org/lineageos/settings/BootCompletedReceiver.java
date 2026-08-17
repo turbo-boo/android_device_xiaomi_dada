@@ -28,7 +28,6 @@ import androidx.preference.PreferenceManager;
 import org.lineageos.settings.doze.PocketService;
 import org.lineageos.settings.cloudmode.CloudModeUtils;
 import org.lineageos.settings.dcdimming.DcDimmingUtils;
-import org.lineageos.settings.dirac.DiracUtils;
 import org.lineageos.settings.edgefilter.EdgeFilterUtils;
 import org.lineageos.settings.thermal.ThermalUtils;
 import org.lineageos.settings.refreshrate.RefreshUtils;
@@ -43,11 +42,6 @@ public class BootCompletedReceiver extends BroadcastReceiver {
         SharedPreferences sharedPrefs = PreferenceManager.getDefaultSharedPreferences(context);
         if (DEBUG)
             Log.d(TAG, "Received boot completed intent");
-        try {
-            DiracUtils.getInstance(context);
-        } catch (Exception e) {
-            Log.d(TAG, "Dirac is not present in system");
-        }
         ThermalUtils.startService(context);
         RefreshUtils.startService(context);
 
