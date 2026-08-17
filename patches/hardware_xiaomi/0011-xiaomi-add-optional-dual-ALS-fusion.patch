@@ -1,0 +1,462 @@
+From 67798ebc67fde23c312c340b7826f757a44198cd Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Fri, 17 Jul 2026 23:34:55 +0900
+Subject: [PATCH 11/14] xiaomi: add optional dual ALS fusion
+
+
+diff --git a/aidl/sensors/Android.bp b/aidl/sensors/Android.bp
+index 0e7b4e2..d7f64ca 100644
+--- a/aidl/sensors/Android.bp
++++ b/aidl/sensors/Android.bp
+@@ -25,10 +25,23 @@ vintf_fragment {
+     vendor: true,
+ }
+ 
+-cc_binary {
++soong_config_module_type {
++    name: "xiaomi_sensors_cc_binary",
++    module_type: "cc_binary",
++    config_namespace: "xiaomi_display",
++    bool_variables: ["dual_als_fusion"],
++    properties: ["cflags"],
++}
++
++xiaomi_sensors_cc_binary {
+     name: "android.hardware.sensors-service.xiaomi-multihal",
+     vendor: true,
+     relative_install_path: "hw",
++    soong_config_variables: {
++        dual_als_fusion: {
++            cflags: ["-DXIAOMI_DUAL_ALS_FUSION"],
++        },
++    },
+     srcs: [
+         "service.cpp",
+         "HalProxy.cpp",
+diff --git a/aidl/sensors/HalProxy.cpp b/aidl/sensors/HalProxy.cpp
+index 44c16d8..92633c0 100644
+--- a/aidl/sensors/HalProxy.cpp
++++ b/aidl/sensors/HalProxy.cpp
+@@ -23,10 +23,12 @@
+ 
+ #include <dlfcn.h>
+ 
++#include <algorithm>
+ #include <cinttypes>
+ #include <cmath>
+ #include <fstream>
+ #include <functional>
++#include <mutex>
+ #include <thread>
+ 
+ namespace android {
+@@ -41,6 +43,41 @@ using ::android::hardware::sensors::V2_0::WakeLockQueueFlagBits;
+ using ::android::hardware::sensors::V2_0::implementation::getTimeNow;
+ using ::android::hardware::sensors::V2_0::implementation::kWakelockTimeoutNs;
+ 
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++namespace {
++
++constexpr char kBackAlsType[] = "xiaomi.sensor.back_lux";
++constexpr char kFusedAlsType[] = "xiaomi.sensor.fused_light";
++constexpr char kFusedAlsName[] = "Xiaomi Fused Ambient Light";
++
++// Keep the virtual handle outside the range used by the vendor sub-HALs.
++constexpr int32_t kFusedAlsHandle = 0x7f000001;
++constexpr int32_t kFusedAlsSensorType =
++        static_cast<int32_t>(V2_1::SensorType::DEVICE_PRIVATE_BASE) + 0xdada;
++
++struct FusedAlsState {
++    int32_t fusedHandle = -1;
++    int32_t fusedSensorType = -1;
++    int32_t frontHandle = -1;
++    int32_t backHandle = -1;
++    bool configured = false;
++    bool active = false;
++    bool frontExternallyActive = false;
++    bool backExternallyActive = false;
++    bool frontValueValid = false;
++    bool backValueValid = false;
++    float frontLux = 0.0f;
++    float backLux = 0.0f;
++    bool lastOutputValid = false;
++    float lastOutputLux = 0.0f;
++};
++
++FusedAlsState gFusedAls;
++std::mutex gFusedAlsMutex;
++
++}  // namespace
++#endif
++
+ typedef V2_0::implementation::ISensorsSubHal*(SensorsHalGetSubHalFunc)(uint32_t*);
+ typedef V2_1::implementation::ISensorsSubHal*(SensorsHalGetSubHalV2_1Func)(uint32_t*);
+ 
+@@ -133,6 +170,10 @@ HalProxy::HalProxy(std::vector<ISensorsSubHalV2_0*>& subHalList,
+ 
+ HalProxy::~HalProxy() {
+     stopThreads();
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++    gFusedAls = {};
++#endif
+ }
+ 
+ Return<void> HalProxy::getSensorsList_2_1(ISensorsV2_1::getSensorsList_2_1_cb _hidl_cb) {
+@@ -179,11 +220,112 @@ Return<Result> HalProxy::setOperationMode(OperationMode mode) {
+ }
+ 
+ Return<Result> HalProxy::activate(int32_t sensorHandle, bool enabled) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    int32_t frontAlsHandle = -1;
++    int32_t backAlsHandle = -1;
++    bool isFusedAls = false;
++    bool isFusedAlsSource = false;
++    bool suppressDisable = false;
++    bool sourceIsFront = false;
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (gFusedAls.configured && sensorHandle == gFusedAls.fusedHandle) {
++            isFusedAls = true;
++            frontAlsHandle = gFusedAls.frontHandle;
++            backAlsHandle = gFusedAls.backHandle;
++        } else if (gFusedAls.configured && sensorHandle == gFusedAls.frontHandle) {
++            isFusedAlsSource = true;
++            sourceIsFront = true;
++            suppressDisable = !enabled && gFusedAls.active;
++        } else if (gFusedAls.configured && sensorHandle == gFusedAls.backHandle) {
++            isFusedAlsSource = true;
++            suppressDisable = !enabled && gFusedAls.active;
++        }
++    }
++
++    if (isFusedAls) {
++        bool alreadyActive;
++        bool frontExternallyActive;
++        bool backExternallyActive;
++        {
++            std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++            alreadyActive = gFusedAls.active;
++            frontExternallyActive = gFusedAls.frontExternallyActive;
++            backExternallyActive = gFusedAls.backExternallyActive;
++            if (!enabled) {
++                gFusedAls.active = false;
++                gFusedAls.frontValueValid = false;
++                gFusedAls.backValueValid = false;
++                gFusedAls.lastOutputValid = false;
++            }
++        }
++
++        if (alreadyActive == enabled) {
++            return Result::OK;
++        }
++
++        auto activateSource = [this](int32_t sourceHandle, bool sourceEnabled) {
++            return getSubHalForSensorHandle(sourceHandle)->activate(
++                    clearSubHalIndex(sourceHandle), sourceEnabled);
++        };
++
++        if (enabled) {
++            Result result = activateSource(frontAlsHandle, true);
++            if (result != Result::OK) {
++                return result;
++            }
++            result = activateSource(backAlsHandle, true);
++            if (result != Result::OK) {
++                activateSource(frontAlsHandle, false);
++                return result;
++            }
++            std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++            gFusedAls.active = true;
++            return Result::OK;
++        }
++
++        Result result = Result::OK;
++        if (!frontExternallyActive) {
++            result = activateSource(frontAlsHandle, false);
++        }
++        if (!backExternallyActive) {
++            Result backResult = activateSource(backAlsHandle, false);
++            if (result == Result::OK) {
++                result = backResult;
++            }
++        }
++        return result;
++    }
++
++    if (isFusedAlsSource && suppressDisable) {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (sourceIsFront) {
++            gFusedAls.frontExternallyActive = false;
++        } else {
++            gFusedAls.backExternallyActive = false;
++        }
++        return Result::OK;
++    }
++#endif
++
+     if (!isSubHalIndexValid(sensorHandle)) {
+         return Result::BAD_VALUE;
+     }
+-    return getSubHalForSensorHandle(sensorHandle)
++    Result result = getSubHalForSensorHandle(sensorHandle)
+             ->activate(clearSubHalIndex(sensorHandle), enabled);
++
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    if (isFusedAlsSource && result == Result::OK) {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (sourceIsFront) {
++            gFusedAls.frontExternallyActive = enabled;
++        } else {
++            gFusedAls.backExternallyActive = enabled;
++        }
++    }
++#endif
++
++    return result;
+ }
+ 
+ Return<Result> HalProxy::initialize_2_1(
+@@ -296,6 +438,27 @@ Return<Result> HalProxy::initializeCommon(
+ 
+ Return<Result> HalProxy::batch(int32_t sensorHandle, int64_t samplingPeriodNs,
+                                int64_t maxReportLatencyNs) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    int32_t frontAlsHandle = -1;
++    int32_t backAlsHandle = -1;
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (gFusedAls.configured && sensorHandle == gFusedAls.fusedHandle) {
++            frontAlsHandle = gFusedAls.frontHandle;
++            backAlsHandle = gFusedAls.backHandle;
++        }
++    }
++    if (frontAlsHandle != -1) {
++        Result result = getSubHalForSensorHandle(frontAlsHandle)->batch(
++                clearSubHalIndex(frontAlsHandle), samplingPeriodNs, maxReportLatencyNs);
++        if (result != Result::OK) {
++            return result;
++        }
++        return getSubHalForSensorHandle(backAlsHandle)->batch(
++                clearSubHalIndex(backAlsHandle), samplingPeriodNs, maxReportLatencyNs);
++    }
++#endif
++
+     if (!isSubHalIndexValid(sensorHandle)) {
+         return Result::BAD_VALUE;
+     }
+@@ -304,6 +467,18 @@ Return<Result> HalProxy::batch(int32_t sensorHandle, int64_t samplingPeriodNs,
+ }
+ 
+ Return<Result> HalProxy::flush(int32_t sensorHandle) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (gFusedAls.configured && sensorHandle == gFusedAls.fusedHandle) {
++            // The fused sensor has no independent hardware FIFO. The framework does not flush
++            // the auto-brightness sensor, so report the operation as unsupported rather than
++            // emitting a flush-complete event with incorrect ordering.
++            return Result::INVALID_OPERATION;
++        }
++    }
++#endif
++
+     if (!isSubHalIndexValid(sensorHandle)) {
+         return Result::BAD_VALUE;
+     }
+@@ -315,6 +490,15 @@ Return<Result> HalProxy::injectSensorData_2_1(const V2_1::Event& event) {
+ }
+ 
+ Return<Result> HalProxy::injectSensorData(const V1_0::Event& event) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (gFusedAls.configured && event.sensorHandle == gFusedAls.fusedHandle) {
++            return Result::BAD_VALUE;
++        }
++    }
++#endif
++
+     Result result = Result::OK;
+     if (mCurrentOperationMode == OperationMode::NORMAL &&
+         event.sensorType != V1_0::SensorType::ADDITIONAL_INFO) {
+@@ -355,8 +539,18 @@ Return<Result> HalProxy::unregisterDirectChannel(int32_t channelHandle) {
+ }
+ 
+ Return<void> HalProxy::configDirectReport(int32_t sensorHandle, int32_t channelHandle,
+-                                          RateLevel rate,
+-                                          ISensorsV2_0::configDirectReport_cb _hidl_cb) {
++                                           RateLevel rate,
++                                           ISensorsV2_0::configDirectReport_cb _hidl_cb) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        if (gFusedAls.configured && sensorHandle == gFusedAls.fusedHandle) {
++            _hidl_cb(Result::INVALID_OPERATION, -1 /* reportToken */);
++            return Void();
++        }
++    }
++#endif
++
+     if (mDirectChannelSubHal == nullptr) {
+         _hidl_cb(Result::INVALID_OPERATION, -1 /* reportToken */);
+     } else if (sensorHandle == -1 && rate != RateLevel::STOP) {
+@@ -552,7 +746,72 @@ void* HalProxy::getHandleForSubHalSharedObject(const std::string& filename) {
+ }
+ 
+ void HalProxy::init() {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    {
++        std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++        gFusedAls = {};
++    }
++#endif
++
+     initializeSensorList();
++
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    int32_t frontAlsHandle = -1;
++    int32_t backAlsHandle = -1;
++    V2_1::SensorInfo frontAlsInfo;
++    V2_1::SensorInfo backAlsInfo;
++
++    for (const auto& sensorEntry : mSensors) {
++        const V2_1::SensorInfo& sensor = sensorEntry.second;
++        if (sensor.flags & V1_0::SensorFlagBits::WAKE_UP) {
++            continue;
++        }
++        if (frontAlsHandle == -1 && sensor.typeAsString == SENSOR_STRING_TYPE_LIGHT) {
++            frontAlsHandle = sensorEntry.first;
++            frontAlsInfo = sensor;
++        } else if (backAlsHandle == -1 && sensor.typeAsString == kBackAlsType) {
++            backAlsHandle = sensorEntry.first;
++            backAlsInfo = sensor;
++        }
++    }
++
++    if (frontAlsHandle != -1 && backAlsHandle != -1 &&
++        mSensors.find(kFusedAlsHandle) == mSensors.end()) {
++        V2_1::SensorInfo fusedAlsInfo = frontAlsInfo;
++        fusedAlsInfo.sensorHandle = kFusedAlsHandle;
++        fusedAlsInfo.name = kFusedAlsName;
++        fusedAlsInfo.vendor = "Xiaomi";
++        fusedAlsInfo.version = 1;
++        fusedAlsInfo.type = static_cast<V2_1::SensorType>(kFusedAlsSensorType);
++        fusedAlsInfo.typeAsString = kFusedAlsType;
++        fusedAlsInfo.maxRange = std::max(frontAlsInfo.maxRange, backAlsInfo.maxRange);
++        fusedAlsInfo.power = frontAlsInfo.power + backAlsInfo.power;
++        fusedAlsInfo.fifoReservedEventCount = 0;
++        fusedAlsInfo.fifoMaxEventCount = 0;
++        fusedAlsInfo.requiredPermission = "";
++        fusedAlsInfo.flags &= ~(static_cast<uint32_t>(V1_0::SensorFlagBits::MASK_DIRECT_REPORT) |
++                                static_cast<uint32_t>(V1_0::SensorFlagBits::MASK_DIRECT_CHANNEL));
++        mSensors.emplace(kFusedAlsHandle, fusedAlsInfo);
++
++        {
++            std::lock_guard<std::mutex> lock(gFusedAlsMutex);
++            gFusedAls.fusedHandle = kFusedAlsHandle;
++            gFusedAls.fusedSensorType = kFusedAlsSensorType;
++            gFusedAls.frontHandle = frontAlsHandle;
++            gFusedAls.backHandle = backAlsHandle;
++            gFusedAls.configured = true;
++        }
++
++        ALOGI("Dual ALS fusion enabled: front handle=0x%08" PRIx32
++              ", back handle=0x%08" PRIx32 ", fused handle=0x%08" PRIx32,
++              static_cast<uint32_t>(frontAlsHandle), static_cast<uint32_t>(backAlsHandle),
++              static_cast<uint32_t>(kFusedAlsHandle));
++    } else {
++        ALOGW("Dual ALS fusion unavailable: front handle=0x%08" PRIx32
++              ", back handle=0x%08" PRIx32,
++              static_cast<uint32_t>(frontAlsHandle), static_cast<uint32_t>(backAlsHandle));
++    }
++#endif
+ }
+ 
+ void HalProxy::stopThreads() {
+@@ -686,15 +945,69 @@ void HalProxy::resetSharedWakelock() {
+ 
+ void HalProxy::postEventsToMessageQueue(const std::vector<Event>& events, size_t numWakeupEvents,
+                                         V2_0::implementation::ScopedWakelock wakelock) {
++#if defined(XIAOMI_DUAL_ALS_FUSION)
++    std::vector<Event> eventsToPost(events);
++    {
++        std::lock_guard<std::mutex> fusedAlsLock(gFusedAlsMutex);
++        if (gFusedAls.active) {
++            bool sourceEventSeen = false;
++            int64_t latestTimestamp = 0;
++            for (const Event& event : events) {
++                if (event.sensorHandle != gFusedAls.frontHandle &&
++                    event.sensorHandle != gFusedAls.backHandle) {
++                    continue;
++                }
++
++                const float lux = event.sensorHandle == gFusedAls.frontHandle
++                        ? event.u.scalar
++                        : event.u.data[0];
++                if (!std::isfinite(lux) || lux < 0.0f) {
++                    continue;
++                }
++
++                sourceEventSeen = true;
++                latestTimestamp = std::max(latestTimestamp, event.timestamp);
++                if (event.sensorHandle == gFusedAls.frontHandle) {
++                    gFusedAls.frontLux = lux;
++                    gFusedAls.frontValueValid = true;
++                } else {
++                    gFusedAls.backLux = lux;
++                    gFusedAls.backValueValid = true;
++                }
++            }
++
++            if (sourceEventSeen &&
++                (gFusedAls.frontValueValid || gFusedAls.backValueValid)) {
++                const float fusedLux = gFusedAls.frontValueValid && gFusedAls.backValueValid
++                        ? std::max(gFusedAls.frontLux, gFusedAls.backLux)
++                        : gFusedAls.frontValueValid ? gFusedAls.frontLux : gFusedAls.backLux;
++                if (!gFusedAls.lastOutputValid || fusedLux != gFusedAls.lastOutputLux) {
++                    Event fusedEvent{};
++                    fusedEvent.timestamp = latestTimestamp;
++                    fusedEvent.sensorHandle = gFusedAls.fusedHandle;
++                    fusedEvent.sensorType = static_cast<V2_1::SensorType>(
++                            gFusedAls.fusedSensorType);
++                    fusedEvent.u.data[0] = fusedLux;
++                    eventsToPost.push_back(fusedEvent);
++                    gFusedAls.lastOutputLux = fusedLux;
++                    gFusedAls.lastOutputValid = true;
++                }
++            }
++        }
++    }
++#else
++    const std::vector<Event>& eventsToPost = events;
++#endif
++
+     size_t numToWrite = 0;
+     std::lock_guard<std::mutex> lock(mEventQueueWriteMutex);
+     if (wakelock.isLocked()) {
+         incrementRefCountAndMaybeAcquireWakelock(numWakeupEvents);
+     }
+     if (mPendingWriteEventsQueue.empty()) {
+-        numToWrite = std::min(events.size(), mEventQueue->availableToWrite());
++        numToWrite = std::min(eventsToPost.size(), mEventQueue->availableToWrite());
+         if (numToWrite > 0) {
+-            if (mEventQueue->write(events.data(), numToWrite)) {
++            if (mEventQueue->write(eventsToPost.data(), numToWrite)) {
+                 // TODO(b/143302327): While loop if mEventQueue->avaiableToWrite > 0 to possibly fit
+                 // in more writes immediately
+                 mEventQueueFlag->wake(static_cast<uint32_t>(EventQueueFlagBits::READ_AND_PROCESS));
+@@ -703,10 +1016,10 @@ void HalProxy::postEventsToMessageQueue(const std::vector<Event>& events, size_t
+             }
+         }
+     }
+-    size_t numLeft = events.size() - numToWrite;
+-    if (numToWrite < events.size() &&
++    size_t numLeft = eventsToPost.size() - numToWrite;
++    if (numToWrite < eventsToPost.size() &&
+         mSizePendingWriteEventsQueue + numLeft <= kMaxSizePendingWriteEventsQueue) {
+-        std::vector<Event> eventsLeft(events.begin() + numToWrite, events.end());
++        std::vector<Event> eventsLeft(eventsToPost.begin() + numToWrite, eventsToPost.end());
+         mPendingWriteEventsQueue.push({eventsLeft, numWakeupEvents});
+         mSizePendingWriteEventsQueue += numLeft;
+         mMostEventsObservedPendingWriteEventsQueue =
