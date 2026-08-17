@@ -1,0 +1,51 @@
+From 8252ff03fe3aee214c38455559d02e4fff1a3391 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 16:33:09 +0900
+Subject: [PATCH 13/14] fingerprint: complete no-op lockout resets locally
+
+
+diff --git a/aidl/fingerprint/Session.cpp b/aidl/fingerprint/Session.cpp
+index c8101bd..ebaa6df 100644
+--- a/aidl/fingerprint/Session.cpp
++++ b/aidl/fingerprint/Session.cpp
+@@ -165,17 +165,38 @@ ndk::ScopedAStatus Session::invalidateAuthenticatorId() {
+ 
+ ndk::ScopedAStatus Session::resetLockout(const HardwareAuthToken& hat) {
+ #ifdef IMPL_V2
++    if (mLockoutTracker.getMode() == LockoutTracker::LockoutMode::kNone) {
++        ALOGI("resetLockout: already unlocked, completing without a vendor request");
++        mLockoutTracker.reset(true);
++        if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
++
++        // ISession methods run on binder threads, while ISessionCallback must be invoked from a
++        // non-binder thread. Qualcomm's backend does not emit a completion callback when it is
++        // already unlocked, so complete this no-op request ourselves.
++        auto cb = mCb;
++        std::thread([cb]() {
++            auto status = cb->onLockoutCleared();
++            if (!status.isOk()) {
++                ALOGE("Failed to report no-op lockout reset: %s", status.getDescription().c_str());
++            }
++        }).detach();
++        return ndk::ScopedAStatus::ok();
++    }
++
++    if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
++
+     hw_auth_token_t authToken;
+     translate(hat, authToken);
+ 
+     int resetResult = mDevice->reset_lockout(mDevice, &authToken);
+     if (resetResult != 0) {
+         ALOGE("Failed to reset lockout: %d", resetResult);
++        return ndk::ScopedAStatus::fromServiceSpecificError(resetResult);
+     }
+-#endif
+-
++#else
+     clearLockout(true);
+     if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
++#endif
+ 
+     return ndk::ScopedAStatus::ok();
+ }
