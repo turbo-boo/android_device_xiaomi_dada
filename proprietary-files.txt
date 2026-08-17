@@ -2301,6 +2301,9 @@ odm/lib64/qsn1rtlp43270.bin;SYMLINK=vendor/lib64/qsn1rtlp43270.bin
 odm/lib64/qsn2all.bin;SYMLINK=vendor/lib64/qsn2all.bin
 odm/lib64/qsn3all.bin;SYMLINK=vendor/lib64/qsn3all.bin
 
+# IFAA
+mi_ext/product/app/IFAAService/IFAAService.apk:product/app/IFAAService/IFAAService.apk;PRESIGNED
+
 # eSIM
 mi_ext/product/etc/default-permissions/EuiccGoogle-default-permissions-google.xml:product/etc/default-permissions/EuiccGoogle-default-permissions-google.xml
 mi_ext/product/priv-app/EuiccGoogle_arm64/EuiccGoogle_arm64.apk:product/priv-app/EuiccGoogle_arm64/EuiccGoogle_arm64.apk;PRESIGNED
