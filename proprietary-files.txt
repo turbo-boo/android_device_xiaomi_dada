@@ -2302,7 +2302,7 @@ odm/lib64/qsn2all.bin;SYMLINK=vendor/lib64/qsn2all.bin
 odm/lib64/qsn3all.bin;SYMLINK=vendor/lib64/qsn3all.bin
 
 # IFAA
-mi_ext/product/app/IFAAService/IFAAService.apk:product/app/IFAAService/IFAAService.apk;PRESIGNED
+mi_ext/product/app/IFAAService/IFAAService.apk:product/app/IFAAService/IFAAService.apk;PRESIGNED;MAKE_COPY_RULE_ONLY
 
 # eSIM
 mi_ext/product/etc/default-permissions/EuiccGoogle-default-permissions-google.xml:product/etc/default-permissions/EuiccGoogle-default-permissions-google.xml
