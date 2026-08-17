@@ -1,0 +1,48 @@
+From 2d04c01579de9b52eb12db9a972e4b6d3036be35 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 21:06:46 +0900
+Subject: [PATCH 14/14] fingerprint: fix cancellation and removal completion
+
+
+diff --git a/aidl/fingerprint/Session.cpp b/aidl/fingerprint/Session.cpp
+index ebaa6df..2bc915e 100644
+--- a/aidl/fingerprint/Session.cpp
++++ b/aidl/fingerprint/Session.cpp
+@@ -138,6 +138,18 @@ ndk::ScopedAStatus Session::removeEnrollments(const std::vector<int32_t>& enroll
+     int error = mDevice->remove(mDevice, fids.data(), static_cast<uint32_t>(fids.size()));
+     if (error) {
+         ALOGE("Failed to remove enrollments: %d", error);
++
++        // There is no AIDL error callback for removeEnrollments. Report an empty
++        // removal list from a worker thread so the framework terminates the
++        // removal client as a failure instead of waiting indefinitely.
++        auto cb = mCb;
++        std::thread([cb]() {
++            auto status = cb->onEnrollmentsRemoved({});
++            if (!status.isOk()) {
++                ALOGE("Failed to report enrollment removal failure: %s",
++                      status.getDescription().c_str());
++            }
++        }).detach();
+     }
+ #endif
+     return ndk::ScopedAStatus::ok();
+@@ -270,12 +282,14 @@ ndk::ScopedAStatus Session::cancel() {
+ 
+     int ret = mDevice->cancel(mDevice);
+ 
+-    if (ret == 0) {
+-        mCb->onError(Error::CANCELED, 0 /* vendorCode */);
+-        return ndk::ScopedAStatus::ok();
++    if (ret != 0) {
++        return ndk::ScopedAStatus::fromServiceSpecificError(ret);
+     }
+ 
+-    return ndk::ScopedAStatus::fromServiceSpecificError(ret);
++    // The legacy fingerprint HAL contract requires cancel() to deliver
++    // FINGERPRINT_ERROR_CANCELED through notify(). Do not send a second AIDL
++    // callback here: Goodix and QCOM both report the cancellation themselves.
++    return ndk::ScopedAStatus::ok();
+ }
+ 
+ ndk::ScopedAStatus Session::close() {
