@@ -1,0 +1,26 @@
+From b2e3e0bd7c56b96c42be66ae230f0e18fea6b47c Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Sun, 16 Aug 2026 16:33:09 +0900
+Subject: [PATCH 12/14] fingerprint: initialize lockout tracker state
+
+
+diff --git a/aidl/fingerprint/LockoutTracker.h b/aidl/fingerprint/LockoutTracker.h
+index 06e6c01..16ab45e 100644
+--- a/aidl/fingerprint/LockoutTracker.h
++++ b/aidl/fingerprint/LockoutTracker.h
+@@ -19,11 +19,12 @@ namespace aidl::android::hardware::biometrics::fingerprint {
+ 
+ class LockoutTracker {
+   public:
+-    LockoutTracker() : mFailedCount(0) {}
+-    ~LockoutTracker() {}
+-
+     enum class LockoutMode : int8_t { kNone = 0, kTimed, kPermanent };
+ 
++    LockoutTracker()
++        : mFailedCount(0), mLockoutTimedStart(0), mCurrentMode(LockoutMode::kNone) {}
++    ~LockoutTracker() {}
++
+     void reset(bool clearAttemptCounter);
+     LockoutMode getMode();
+     void addFailedAttempt();
