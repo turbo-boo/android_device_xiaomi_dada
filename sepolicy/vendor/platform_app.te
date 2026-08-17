@@ -1,0 +1,7 @@
+# IFAAService talks to the vendor AIDL Mlipay service for fingerprint payment.
+hal_client_domain(platform_app, hal_mlipay)
+binder_call(platform_app, hal_mlipay_default)
+
+# The stock IFAAService reads these fingerprint/payment properties.
+get_prop(platform_app, vendor_fp_prop)
+get_prop(platform_app, vendor_payment_security_prop)
