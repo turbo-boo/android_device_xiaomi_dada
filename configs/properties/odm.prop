@@ -1,6 +1,9 @@
 # Bluetooth
 bluetooth.device.default_name=Xiaomi 15
 
+# Camera
+ro.vendor.camera.interpolation.mialgo.support=true
+
 # Display
 persist.sys.miui_resolution=1200,2670,520
 ro.vendor.mi_sf.supported_automode_maxfps_list=120
