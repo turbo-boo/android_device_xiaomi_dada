@@ -203,7 +203,6 @@ blob_fixups: blob_fixups_user_type = {
     # This is separate from SAT wide-always-on, which remains enabled below in
     # the stock configuration and is used for camera quality and lens switching.
     'odm/etc/camera/camxoverridesettings.txt': blob_fixup()
-        .regex_replace('enableAONUsecase=TRUE', 'enableAONUsecase=FALSE'),
     # Xiaomi's super-night formatters route their destinations through a
     # compiler-generated sprintf helper. Convert the helpers to the ordinary
     # vsnprintf ABI. Preserve known destination sizes and use two bytes for the
