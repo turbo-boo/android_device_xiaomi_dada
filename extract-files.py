@@ -202,7 +202,7 @@ blob_fixups: blob_fixups_user_type = {
     # and prevent Cinematic mode from reserving its reference-frame pipeline.
     # This is separate from SAT wide-always-on, which remains enabled below in
     # the stock configuration and is used for camera quality and lens switching.
-    'odm/etc/camera/camxoverridesettings.txt': blob_fixup()
+    'odm/etc/camera/camxoverridesettings.txt': blob_fixup(),
     # Xiaomi's super-night formatters route their destinations through a
     # compiler-generated sprintf helper. Convert the helpers to the ordinary
     # vsnprintf ABI. Preserve known destination sizes and use two bytes for the
