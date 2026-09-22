@@ -1,0 +1,82 @@
+From 96e384678686279fb7c069a1faa2c9e0a72461be Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 13:42:33 +0900
+Subject: [PATCH] SystemUI: Fix media controller lifecycle for panel sessions
+
+bind() replaced mToken and created a new MediaController without ever
+unregistering mCb from the previous one, and onDestroy() left the
+controller connected, so a panel could keep receiving metadata
+callbacks for a session it no longer displays.
+
+Route creation, switching and teardown through updateMediaController(),
+which keeps the existing controller when the token is unchanged,
+unregisters the old callback before rebinding, and clears the
+controller from onDestroy().
+---
+ .../ui/controller/MediaControlPanel.java      | 32 +++++++++++--------
+ 1 file changed, 18 insertions(+), 14 deletions(-)
+
+diff --git a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaControlPanel.java b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaControlPanel.java
+index 5f23002c4d99..888058122696 100644
+--- a/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaControlPanel.java
++++ b/packages/SystemUI/src/com/android/systemui/media/controls/ui/controller/MediaControlPanel.java
+@@ -138,6 +138,7 @@ import kotlin.Unit;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
++import java.util.Objects;
+ import java.util.Random;
+ import java.util.concurrent.Executor;
+ 
+@@ -324,6 +325,7 @@ public class MediaControlPanel {
+      * Clean up seekbar and controller when panel is destroyed
+      */
+     public void onDestroy() {
++        updateMediaController(null);
+         if (mSeekBarObserver != null) {
+             mSeekBarViewModel.getProgress().removeObserver(mSeekBarObserver);
+         }
+@@ -510,16 +512,7 @@ public class MediaControlPanel {
+         mUid = data.getAppUid();
+         mInstanceId = data.getInstanceId();
+ 
+-        if (mToken == null || !mToken.equals(token)) {
+-            mToken = token;
+-        }
+-
+-        if (mToken != null) {
+-            mController = new MediaController(mContext, mToken);
+-            mController.registerCallback(mCb);
+-        } else {
+-            mController = null;
+-        }
++        updateMediaController(token);
+ 
+         // Click action
+         PendingIntent clickIntent = data.getClickIntent();
+@@ -1584,10 +1577,21 @@ public class MediaControlPanel {
+         set.setAlpha(actionId, visible ? 1.0f : 0.0f);
+     }
+ 
+-    /**
+-      * Here is to solve the problem that the panel title and artist are not syncing in time 
+-      * @author alphi-wang-cn
+-      */ 
++    private void updateMediaController(@Nullable MediaSession.Token token) {
++        if (Objects.equals(mToken, token)) {
++            return;
++        }
++        if (mController != null) {
++            mController.unregisterCallback(mCb);
++        }
++        mToken = token;
++        mController = token == null ? null : new MediaController(mContext, token);
++        if (mController != null) {
++            mController.registerCallback(mCb);
++        }
++    }
++
++    /** Updates the panel title and artist when session metadata changes. */
+      private final MediaController.Callback mCb = new MediaController.Callback() { 
+          @Override 
+          public void onMetadataChanged(MediaMetadata metadata) { 
