@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Sat, 29 Aug 2026 00:00:00 +0000
+Subject: [PATCH] extract-utils: support custom app module names
+
+---
+ extract_utils/makefiles.py | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/extract_utils/makefiles.py b/extract_utils/makefiles.py
+index 759c238..826e5b0 100644
+--- a/extract_utils/makefiles.py
++++ b/extract_utils/makefiles.py
+@@ -347,7 +347,12 @@ def write_apex_package(file: File, builder: FileBpBuilder):
+ 
+ 
+ def write_app_package(file: File, builder: FileBpBuilder):
+-    _, package_name = file_stem_package_name(file)
++    stem, package_name = file_stem_package_name(file, can_have_stem=True)
++
++    if stem is not None:
++        builder.set('filename', file.basename)
++        builder.set('install_path_skip_module_dir', True)
++        builder.relative_install_path()
+ 
+     # TODO: remove required entries from package_names if actually needed
+     # TODO: check if manually specified certificates are needed
+-- 
+2.43.0
