@@ -1,0 +1,103 @@
+From c0b318d4c3d5f99c496b2bccf9bbaf2416c1d2cb Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 13:57:41 +0900
+Subject: [PATCH] LunarisDolby: Serialize and harden effect control recovery
+
+Make checkEffect(), applySavedState() and release() synchronized so the
+effect handle cannot be recreated concurrently with a release or another
+state restore.
+
+checkEffect() now asserts the repository is alive instead of silently
+returning, tolerates IllegalStateException from the audio effect when it
+is no longer initialized, and swaps in the replacement effect before
+releasing the previous one so recovery never runs against a released
+handle.
+
+applySavedState() returns early once the repository is released and logs
+failures instead of propagating them to callers.
+---
+ .../org/lunaris/dolby/data/DolbyRepository.kt | 48 ++++++++++++-------
+ 1 file changed, 31 insertions(+), 17 deletions(-)
+
+diff --git a/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt b/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
+index 9704126..888b6be 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
+@@ -64,22 +64,28 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+         }
+     }
+ 
++    @Synchronized
+     private fun checkEffect() {
+-        if (isReleased) {
+-            DolbyConstants.dlog(TAG, "Repository released, skipping effect check")
+-            return
++        check(!isReleased) { "Repository has been released" }
++
++        val hasControl = try {
++            dolbyEffect.hasControl()
++        } catch (e: IllegalStateException) {
++            DolbyConstants.dlog(TAG, "Audio effect is no longer initialized: ${e.message}")
++            false
+         }
+-        
++        if (hasControl) return
++
++        DolbyConstants.dlog(TAG, "Lost audio effect control, recreating")
++        val previousEffect = dolbyEffect
++        val replacementEffect = createDolbyEffect()
++        dolbyEffect = replacementEffect
+         try {
+-            if (!dolbyEffect.hasControl()) {
+-                DolbyConstants.dlog(TAG, "Lost audio effect control, recreating")
+-                dolbyEffect.release()
+-                dolbyEffect = createDolbyEffect()
+-                restoreSavedProfileIfNeeded()
+-            }
++            previousEffect.release()
+         } catch (e: Exception) {
+-            DolbyConstants.dlog(TAG, "Error checking effect: ${e.message}")
++            DolbyConstants.dlog(TAG, "Error releasing replaced effect: ${e.message}")
+         }
++        restoreSavedProfileIfNeeded()
+     }
+ 
+     private fun readSavedProfile(): Int? {
+@@ -134,13 +140,20 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+         }
+     }
+ 
++    @Synchronized
+     fun applySavedState() {
+-        checkEffect()
+-        val enabled = defaultPrefs.getBoolean(DolbyConstants.PREF_ENABLE, false) &&
+-            !isAutoDisabledForCurrentRoute()
+-        dolbyEffect.dsOn = enabled
+-        if (enabled) {
+-            restoreSavedProfileIfNeeded()
++        if (isReleased) return
++
++        try {
++            checkEffect()
++            val enabled = defaultPrefs.getBoolean(DolbyConstants.PREF_ENABLE, false) &&
++                !isAutoDisabledForCurrentRoute()
++            dolbyEffect.dsOn = enabled
++            if (enabled) {
++                restoreSavedProfileIfNeeded()
++            }
++        } catch (e: Exception) {
++            DolbyConstants.dlog(TAG, "Failed to apply saved state: ${e.message}")
+         }
+     }
+ 
+@@ -933,6 +946,7 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+         }
+     }
+     
++    @Synchronized
+     private fun release() {
+         if (!isReleased) {
+             DolbyConstants.dlog(TAG, "Releasing repository resources")
+-- 
+2.43.0
+
