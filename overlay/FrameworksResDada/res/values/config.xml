@@ -499,6 +499,16 @@
          non-zero. -->
     <integer name="config_defaultPeakRefreshRate">120</integer>
 
+    <!-- Burn-in protection: periodically shift the status bar and ambient display
+         content. The status bar amplitude comes from the SystemUI
+         status_bar_padding_*/status_bar_offset_max_y dimens; the offsets below only
+         apply to the ambient display (AOD). -->
+    <bool name="config_enableBurnInProtection">true</bool>
+    <integer name="config_burnInProtectionMinHorizontalOffset">0</integer>
+    <integer name="config_burnInProtectionMaxHorizontalOffset">1</integer>
+    <integer name="config_burnInProtectionMinVerticalOffset">0</integer>
+    <integer name="config_burnInProtectionMaxVerticalOffset">1</integer>
+
     <!-- Enables or disables haptic effect when the text insertion/selection handle is moved
          manually by the user. Off by default, since the expected haptic feedback may not be
          available on some devices. -->
