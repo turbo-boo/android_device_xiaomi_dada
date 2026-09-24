@@ -98,6 +98,21 @@
         <item>@string/edge_filter_level_high</item>
     </string-array>
 
+    <!-- Video enhancement modes -->
+    <string-array name="memc_mode_entries">
+        <item>@string/memc_mode_off</item>
+        <item>@string/memc_mode_memc</item>
+        <item>@string/memc_mode_aie</item>
+        <item>@string/memc_mode_ais</item>
+    </string-array>
+
+    <string-array name="memc_mode_values" translatable="false">
+        <item>off</item>
+        <item>memc</item>
+        <item>aie</item>
+        <item>ais</item>
+    </string-array>
+
     <!-- Long press timeouts -->
     <string-array name="game_bar_longpress_entries">
         <item>@string/game_bar_longpress_1s</item>

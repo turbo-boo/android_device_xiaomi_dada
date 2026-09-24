@@ -29,6 +29,7 @@ import org.lineageos.settings.doze.PocketService;
 import org.lineageos.settings.cloudmode.CloudModeUtils;
 import org.lineageos.settings.dcdimming.DcDimmingUtils;
 import org.lineageos.settings.edgefilter.EdgeFilterUtils;
+import org.lineageos.settings.memc.MemcUtils;
 import org.lineageos.settings.thermal.ThermalUtils;
 import org.lineageos.settings.refreshrate.RefreshUtils;
 
@@ -51,6 +52,11 @@ public class BootCompletedReceiver extends BroadcastReceiver {
         // DC Dimming
         boolean dcDimmingEnabled = sharedPrefs.getBoolean(DC_DIMMING_KEY, false);
         DcDimmingUtils.setEnabled(dcDimmingEnabled);
+
+        // Video enhancement mode (off/memc/aie/ais). The properties do not
+        // survive a reboot, and writing them has no service dependency, so no
+        // retry loop.
+        MemcUtils.apply(context);
 
         // Edge mis-touch protection
         EdgeFilterUtils.applyLater(context);

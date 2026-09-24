@@ -1,0 +1,9 @@
+# Video enhancement capability flags.
+#
+# The media framework reads this property from the client (app) process, so it
+# cannot use the platform default type for ro.vendor.*, vendor_default_prop,
+# which is vendor-internal on Treble builds and readonly-denied to appdomain
+# and coredomain. vendor_public_vendor_default_prop is the vendor property type
+# with a blanket get_prop(domain, ...) grant in the Qualcomm vendor policy.
+ro.vendor.media.video.frc.support u:object_r:vendor_public_vendor_default_prop:s0
+ro.vendor.media.video.vpp.support u:object_r:vendor_public_vendor_default_prop:s0

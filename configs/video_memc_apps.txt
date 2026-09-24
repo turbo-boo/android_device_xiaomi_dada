@@ -1,0 +1,39 @@
+# Packages allowed to use video motion enhancement (MEMC/FRC).
+# Mirrors the VppWhiteListFRC set shipped in the stock
+# /odm/vendor/etc/videobox.json, deduplicated.
+#
+# One exact package name per line. Blank lines and lines starting with '#'
+# are ignored. The media framework reads this file once per process and fails
+# closed when it is missing, unreadable or empty.
+air.tv.douyu.android
+com.amazon.avod.thirdpartyclient
+com.baidu.netdisk
+com.cctv.yangshipin.app.androidp
+com.cmcc.cmvideo
+com.douyu.rush
+com.gallery.player
+com.google.android.apps.photos
+com.google.android.youtube
+com.hunantv.imgo.activity
+com.iqiyi.i18n
+com.miui.gallery
+com.miui.mediaviewer
+com.miui.video
+com.miui.videoplayer
+com.mxtech.videoplayer.ad
+com.netflix.mediaclient
+com.qiyi.video
+com.sohu.sohuvideo
+com.ss.android.article.lite
+com.ss.android.article.news
+com.ss.android.article.video
+com.tencent.qqlive
+com.tvbc.maiduidui
+com.xunlei.downloadprovider
+com.youku.international.phone
+com.youku.phone
+in.startv.hotstar
+org.videolan.vlc
+tv.danmaku.bili
+tv.danmaku.bilibilihd
+tv.pps.mobile

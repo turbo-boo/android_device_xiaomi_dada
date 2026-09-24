@@ -27,3 +27,6 @@ binder_call(devicesettings_app, surfaceflinger)
 
 # GameBar GPU information.
 binder_call(devicesettings_app, gpuservice)
+
+# Video motion enhancement (MEMC) toggle, read by the media framework.
+set_prop(devicesettings_app, debug_prop)
