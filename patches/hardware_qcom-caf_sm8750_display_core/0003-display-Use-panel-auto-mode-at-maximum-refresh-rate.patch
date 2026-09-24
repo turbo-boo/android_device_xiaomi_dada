@@ -1,0 +1,210 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Tue, 22 Sep 2026 00:00:00 +0900
+Subject: [PATCH] display: Keep LTPO auto mode across logical refresh rates
+
+Some panels expose a fixed maximum-refresh mode and an autonomous mode
+with otherwise identical client-visible attributes. The normal config
+deduplication keeps only one of them, while the DRM switch path resolves
+duplicates from the beginning of the mode list. This prevents the panel's
+autonomous refresh mode from being selected reliably.
+
+AOSP SurfaceFlinger also selects fixed lower-rate modes for content pacing.
+On an LTPO panel this leaves the DDIC in a fixed mode instead of the
+maximum-rate autonomous mode, so it cannot lower its physical scan rate
+independently while the screen is static.
+
+Allow a device to identify its autonomous mode by the DRM hskew marker and
+remember that physical config before client config deduplication. Resolve
+compatible built-in client configs at or below its maximum rate to that
+physical auto config, while preserving the requested config as the
+client-visible active config and logical vsync period. This keeps render
+pacing under SurfaceFlinger control and physical idle-rate selection under
+the DDIC's autonomous mode.
+---
+ include/display_properties.h         |  1 +
+ sdm/include/core/display_interface.h |  1 +
+ sdm/libs/dal/hw_device_drm.cpp       | 14 +++++++++++++-
+ sdmclient/sdm_display.cpp            | 50 ++++++++++++++++++++++--
+ sdmclient/sdm_display.h              |  3 +++
+ 5 files changed, 62 insertions(+), 7 deletions(-)
+
+diff --git a/include/display_properties.h b/include/display_properties.h
+index bbb3fe828e3607905334546a720f55e818d86516..85e39aaf76154cdbb869e64c8c4713abcc7a6acc 100644
+--- a/include/display_properties.h
++++ b/include/display_properties.h
+@@ -246,6 +246,7 @@
+ #define DISABLE_IDLE_TIME_HDR                DISPLAY_PROP("disable_idle_time_hdr")
+ #define DISABLE_IDLE_TIME_VIDEO              DISPLAY_PROP("disable_idle_time_video")
+ #define DISABLE_IDLE_FPS_SWITCH              DISPLAY_PROP("disable_idle_fps_switch")
++#define PRIMARY_AUTO_MODE_HSKEW_PROP          DISPLAY_PROP("primary_auto_mode_hskew")
+ #define DISABLE_IDLE_SCALING_LAYERS          DISPLAY_PROP("disable_idle_scaling_layers")
+ #define DISABLE_LLCC_DURING_AOD              DISPLAY_PROP("disable_llcc_during_aod")
+ #define DISABLE_CWB_IDLE_FALLBACK            DISPLAY_PROP("disable_cwb_idle_fallback")
+diff --git a/sdm/include/core/display_interface.h b/sdm/include/core/display_interface.h
+index 13430a138ed6e0ed1c5bf1630b6d5c90bc2912ab..e8247b4122f165806a768754216312d58844a0c2 100644
+--- a/sdm/include/core/display_interface.h
++++ b/sdm/include/core/display_interface.h
+@@ -271,6 +271,7 @@ struct DisplayConfigVariableInfo : public DisplayConfigGroupInfo {
+   uint32_t fps = 0;               //!< Frame rate per second.
+   uint32_t vsync_period_ns = 0;   //!< VSync period in nanoseconds.
+   bool is_virtual_config = false;
++  bool is_auto_config = false;  //!< Physical panel mode with autonomous refresh rate switching.
+   int32_t parent_config_index = -1;   //!< if virtual config, then corresponding panel config
+   uint32_t early_ept_timeout = 0;     //!< Early EPT timeout value ns
+ 
+diff --git a/sdm/libs/dal/hw_device_drm.cpp b/sdm/libs/dal/hw_device_drm.cpp
+index c21e9dfe6f08dc66bc1c20bcfb4019075653a8e6..383573d0825ff7436d96abcb7f101cd34a2aae9c 100644
+--- a/sdm/libs/dal/hw_device_drm.cpp
++++ b/sdm/libs/dal/hw_device_drm.cpp
+@@ -910,6 +910,14 @@ DisplayError HWDeviceDRM::PopulateDisplayAttributes(uint32_t index) {
+   display_attributes_[index].fps = mode.vrefresh;
+   display_attributes_[index].vsync_period_ns =
+     UINT32(1000000000L / display_attributes_[index].fps);
++  if (disp_type_ == DRMDisplayType::PERIPHERAL) {
++    int auto_mode_hskew = 0;
++    if (Debug::GetProperty(PRIMARY_AUTO_MODE_HSKEW_PROP, &auto_mode_hskew) == kErrorNone &&
++        auto_mode_hskew > 0 && mode.hskew == auto_mode_hskew) {
++      display_attributes_[index].is_auto_config = true;
++      DLOGI("Found primary auto mode with hskew %#x at index %u", auto_mode_hskew, index);
++    }
++  }
+ 
+   /*
+               Active                 Front           Sync           Back
+@@ -1281,7 +1289,9 @@ void HWDeviceDRM::SetDisplaySwitchMode(uint32_t index) {
+     panel_mode_changed_ = mode_flag;
+   }
+ 
+-  for (uint32_t mode_index = 0; mode_index < connector_info_.modes.size(); mode_index++) {
++  const uint32_t requested_mode_index = index;
++  for (uint32_t offset = 0; offset < connector_info_.modes.size(); offset++) {
++    uint32_t mode_index = (requested_mode_index + offset) % connector_info_.modes.size();
+     if ((to_set.mode.vdisplay == connector_info_.modes[mode_index].mode.vdisplay) &&
+         (to_set.mode.hdisplay == connector_info_.modes[mode_index].mode.hdisplay) &&
+         (to_set.mode.vrefresh == connector_info_.modes[mode_index].mode.vrefresh) &&
+@@ -1335,6 +1345,8 @@ void HWDeviceDRM::SetDisplaySwitchMode(uint32_t index) {
+     current_mode.mode.vdisplay == to_set.mode.vdisplay) {
+     seamless_mode_switch_ = true;
+   }
++  DLOGI_IF(kTagDriverConfig, "Selected physical mode %u (hskew %#x)", current_mode_index_,
++           connector_info_.modes[current_mode_index_].mode.hskew);
+ }
+ 
+ DisplayError HWDeviceDRM::SetDisplayAttributes(uint32_t index) {
+diff --git a/sdmclient/sdm_display.cpp b/sdmclient/sdm_display.cpp
+index ca0b7bebd65610b506db2fc435850528a9dfadf5..6aa7bbeb989fa13085f7bb9fb42d7d82d46c2aee 100644
+--- a/sdmclient/sdm_display.cpp
++++ b/sdmclient/sdm_display.cpp
+@@ -742,10 +742,17 @@ void SDMDisplay::UpdateConfigs() {
+ 
+   // For each config store the corresponding index which client understands.
+   sdm_config_map_.resize(num_configs_);
++  auto_real_config_ = UINT_MAX;
++  auto_config_info_ = {};
+ 
+   for (uint32_t i = 0; i < num_configs_; i++) {
+     DisplayConfigVariableInfo info = {};
+     GetDisplayAttributesForConfig(INT(i), &info);
++    if (info.is_auto_config) {
++      auto_real_config_ = i;
++      auto_config_info_ = info;
++      DLOGI("Registered physical auto config %u", i);
++    }
+     bool config_exists = false;
+     for (auto &config : variable_config_map_) {
+       if (config.second == info) {
+@@ -1343,10 +1350,8 @@ DisplayError SDMDisplay::GetActiveConfig(bool get_real_config, Config *out_confi
+   } else {
+     std::lock_guard<std::mutex> lock(active_config_lock_);
+     if (pending_config_) {
+-      *out_config = pending_config_index_;
+-      if (get_real_config) {
+-        GetParentConfig(out_config);
+-      }
++      *out_config = get_real_config ? GetSDMRealConfig(pending_config_index_)
++                                    : pending_config_index_;
+     } else {
+       GetSDMActiveConfig(get_real_config, out_config);
+     }
+@@ -4092,6 +4097,15 @@ DisplayError SDMDisplay::GetSDMActiveConfig(bool get_real_config, Config *config
+   if (error != kErrorNone) {
+     return error;
+   }
++
++  // The autonomous DRM mode advertises its maximum timing, while the requested client config
++  // remains the source of the logical vsync period exposed to SurfaceFlinger.
++  if (!get_real_config && real_config == auto_real_config_ &&
++      variable_config_map_.find(active_config_index_) != variable_config_map_.end() &&
++      GetSDMRealConfig(active_config_index_) == real_config) {
++    *config_index = active_config_index_;
++    return kErrorNone;
++  }
+   *config_index = real_config;
+ 
+   if (get_real_config) {
+@@ -4183,8 +4197,8 @@ DisplayError SDMDisplay::FinalizeDisplayConfig(bool check_pending_config, Config
+     return kErrorNone;
+   }
+ 
+-  auto &info = variable_config_map_[new_config];
+-  Config new_real_config = (info.is_virtual_config) ? info.parent_config_index : new_config;
++  const DisplayConfigVariableInfo &info = variable_config_map_[new_config];
++  Config new_real_config = GetSDMRealConfig(new_config);
+   Config current_real_config = 0;
+   display_intf_->GetActiveConfig(&current_real_config);
+   if (current_real_config != new_real_config) {
+@@ -4220,6 +4234,30 @@ DisplayError SDMDisplay::FinalizeDisplayConfig(bool check_pending_config, Config
+   return kErrorNone;
+ }
+ 
++Config SDMDisplay::GetSDMRealConfig(Config config) const {
++  const auto config_it = variable_config_map_.find(config);
++  if (config_it == variable_config_map_.end()) {
++    return config;
++  }
++
++  const DisplayConfigVariableInfo &info = config_it->second;
++  Config real_config = info.is_virtual_config ? info.parent_config_index : config;
++  if (type_ != kBuiltIn || auto_real_config_ == UINT_MAX ||
++      real_config == auto_real_config_) {
++    return real_config;
++  }
++
++  // A compatible logical config controls client pacing; the DDIC auto mode controls the
++  // physical scan rate and may idle below that logical rate without another DRM mode switch.
++  const DisplayConfigGroupInfo &auto_group = auto_config_info_;
++  const DisplayConfigGroupInfo &requested_group = info;
++  if (auto_group == requested_group && info.fps <= auto_config_info_.fps) {
++    return auto_real_config_;
++  }
++
++  return real_config;
++}
++
+ // This function gives real config corresponding to virtual config, else no change in input.
+ DisplayError SDMDisplay::GetParentConfig(Config *config) {
+   const auto &info = variable_config_map_.find(*config);
+diff --git a/sdmclient/sdm_display.h b/sdmclient/sdm_display.h
+index 804fd446cead80edc0afc81c2e6a14da9ffda5a4..b6543bb7f49430876be661af8a303e0b9a3ce7a4 100644
+--- a/sdmclient/sdm_display.h
++++ b/sdmclient/sdm_display.h
+@@ -660,6 +660,8 @@ public:
+   bool skip_commit_ = false;
+   std::map<uint32_t, DisplayConfigVariableInfo> variable_config_map_;
+   std::vector<uint32_t> sdm_config_map_;
++  Config auto_real_config_ = UINT_MAX;
++  DisplayConfigVariableInfo auto_config_info_ = {};
+   bool client_connected_ = true;
+   bool pending_config_ = false;
+   bool has_client_composition_ = false;
+@@ -726,6 +728,7 @@ public:
+   bool IsVirtualConfig(Config config);
+   DisplayError SetFBForExtendedResolution(Config config, bool *is_virtual_config_fps_switched);
+   DisplayError FinalizeDisplayConfig(bool check_pending_config, Config new_config);
++  Config GetSDMRealConfig(Config config) const;
+   DisplayError GetParentConfig(Config *config);
+   bool NotifyIdleNow();
+   bool NeedsSDMExtendedResolution();
+-- 
+2.43.0
