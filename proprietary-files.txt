@@ -1797,27 +1797,6 @@ odm/lib64/hw/fingerprint.qcom_us.so:odm/lib64/hw/fingerprint.qcom_us.default.so;
 odm/lib64/libgf_hal.so;DISABLE_DEPS
 odm/lib64/libmmfp.so;DISABLE_DEPS
 
-# Face
-# Stock standard AIDL v4 IFace/default HAL (mifaced/libmiface) with its MI-TEE
-# runtime. miface.rc starts /odm/bin/hw/mifaced once the MI-TEE VM has booted.
-odm/bin/hw/mifaced
-odm/etc/init/miface.rc
-odm/etc/init/miface_start_wait_mitee_boot_completed.rc
-odm/etc/vintf/manifest/android.hardware.biometrics.face-v4.xml
-odm/etc/vintf/manifest/vendor.xiaomi.hardware.aek.xml
-odm/lib64/libmiface.so
-vendor/lib64/vendor.xiaomi.hardware.aek-V1-ndk.so
-# MI-TEE: the face HAL loads its TAs through the stock TEE supplicant.
-odm/bin/tee-supplicant
-odm/etc/init/tee-supplicant.rc
-odm/lib64/libteecli.so
-odm/lib64/vendor.qti.qvirt-V1-ndk.so
-odm/mitee/ta/655a4b46-cd77-11ea-aafbf382a6988e7b.ta
-odm/mitee/ta/66147267-5b44-4aa3-bd734138c7fab03a.ta
-odm/mitee/ta/69e4f326-d5cd-e780-3987619f04784525.ta
-odm/mitee/ta/a13339be-7082-4d2d-bf83a53e4687a635.ta
-odm/mitee/ta/a3ba6512-6e0e-4065-93165e4a7d04ca08.ta
-
 # Camera ODM
 odm/bin/hw/misensor_camera
 odm/bin/hw/vendor.qti.camera.provider-service_64
