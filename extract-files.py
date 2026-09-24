@@ -306,7 +306,39 @@ blob_fixups: blob_fixups_user_type = {
         'vendor/lib64/libcamera2ndk_vendor.so',
     ): blob_fixup()
         .replace_needed('android.frameworks.cameraservice.device-V2-ndk.so', 'android.frameworks.cameraservice.device-V3-ndk.so')
-        .replace_needed('android.frameworks.cameraservice.service-V2-ndk.so', 'android.frameworks.cameraservice.service-V3-ndk.so')
+        .replace_needed('android.frameworks.cameraservice.service-V2-ndk.so', 'android.frameworks.cameraservice.service-V3-ndk.so'),
+    # The stock face HAL trigger waits for vendor.mitee_vm.boot_completed, which
+    # this device never publishes (the MI-TEE VM runs inside the Android VM, so
+    # there is no separate VM boot-completion property), and it also starts
+    # vendor.miface from /vendor/bin/hw/mifaced, a path that does not exist here
+    # because the HAL is packaged on /odm only (stock's /vendor/odm is a symlink
+    # to /odm). Gate on the TEE readiness properties this device does publish
+    # (the TEE file-system state and the RPMB provisioning state) and start only
+    # odm.miface.
+    'odm/etc/init/miface_start_wait_mitee_boot_completed.rc': blob_fixup()
+        .regex_replace(
+            r'on property:ro\.vendor\.miface\.started=true'
+            r' && property:sys\.boot_completed=1'
+            r' && property:vendor\.mitee_vm\.boot_completed=1\n'
+            r'    start odm\.miface\n'
+            r'    start vendor\.miface\n',
+            '# Stock also starts `vendor.miface` (/vendor/bin/hw/mifaced) here. That binary does\n'
+            '# not exist on this device - the face HAL is packaged only on /odm\n'
+            "# (/odm/bin/hw/mifaced; stock's /vendor/odm is a symlink to /odm) - so the stock\n"
+            '# line is a duplicate start of a missing file, every boot. Start only the service\n'
+            '# whose binary is actually packaged.\n'
+            '#\n'
+            '# The stock readiness gate waits for vendor.mitee_vm.boot_completed, which this\n'
+            '# device never sets: the MI-TEE VM runs inside the Android VM, so there is no\n'
+            '# separate VM boot-completion property. Gate on the TEE readiness properties this\n'
+            '# device does publish instead - the TEE file-system state and the RPMB\n'
+            '# provisioning state - both of which are set before the face TA can be loaded.\n'
+            'on property:ro.vendor.miface.started=true'
+            ' && property:sys.boot_completed=1'
+            ' && property:vendor.teefs_state=ready'
+            ' && property:vendor.mitee_vm.rpmb_state=1\n'
+            '    start odm.miface\n',
+        ),
 }
 
 module = ExtractUtilsModule(
