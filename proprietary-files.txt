@@ -220,10 +220,6 @@ vendor/lib64/rfs/dsp/libVppFrcQnnHtp.so
 vendor/lib64/rfs/dsp/libvpt_action_recognition.so
 vendor/lib64/rfs/dsp/libworker_pool.so
 
-# Media (Codec2 filters)
-vendor/lib64/libqcodec2_rffilter.so
-vendor/lib64/libqcodec2_srfilter.so
-
 # ODM DSP
 odm/lib64/rfs/dsp/libapn_dsp_skel.so
 odm/lib64/rfs/dsp/libbitml_nsp_73na_skel.so

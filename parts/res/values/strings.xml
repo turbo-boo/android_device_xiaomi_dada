@@ -257,16 +257,6 @@
     <string name="edge_filter_level_medium">Medium</string>
     <string name="edge_filter_level_high">High</string>
 
-    <!-- Video enhancement (MEMC/AIE/AIS) settings -->
-    <string name="memc_title">Video enhancement</string>
-    <string name="memc_summary">Motion smoothing, image enhancement, or AI super-resolution for supported video apps</string>
-    <string name="memc_mode_title">Enhancement mode</string>
-    <string name="memc_mode_summary">Balances picture quality against power use. Only one mode runs at a time; has no effect in unsupported apps or on protected content.</string>
-    <string name="memc_mode_off">Off</string>
-    <string name="memc_mode_memc">Motion smoothing (MEMC)</string>
-    <string name="memc_mode_aie">Image enhancement (AIE)</string>
-    <string name="memc_mode_ais">AI super-resolution (AIS)</string>
-
     <!-- Cloud mode settings -->
     <string name="cloud_mode_title">Touch response modes</string>
     <string name="cloud_mode_summary">Improve touch handling in special conditions</string>

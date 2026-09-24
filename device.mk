@@ -47,20 +47,6 @@ PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.telephony.euicc.mep.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/android.hardware.telephony.euicc.mep.xml \
     $(LOCAL_PATH)/configs/permissions/privapp-permissions-EuiccGoogle.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/permissions/privapp-permissions-EuiccGoogle.xml
 
-# Video enhancement (MEMC / AIE / AIS)
-PRODUCT_COPY_FILES += \
-    $(LOCAL_PATH)/configs/video_aie_apps.txt:$(TARGET_COPY_OUT_SYSTEM)/etc/video_aie_apps.txt \
-    $(LOCAL_PATH)/configs/video_ais_apps.txt:$(TARGET_COPY_OUT_SYSTEM)/etc/video_ais_apps.txt \
-    $(LOCAL_PATH)/configs/video_memc_apps.txt:$(TARGET_COPY_OUT_SYSTEM)/etc/video_memc_apps.txt
-
-PRODUCT_SYSTEM_PROPERTIES += \
-    debug.config.media.video.aie.support=true \
-    debug.config.media.video.ais.support=true \
-    debug.media.video.ais=false \
-    debug.media.video.frc=false \
-    debug.media.video.ve=false \
-    debug.media.video.vpp=false
-
 # Soong namespaces
 PRODUCT_SOONG_NAMESPACES += \
     $(LOCAL_PATH)
