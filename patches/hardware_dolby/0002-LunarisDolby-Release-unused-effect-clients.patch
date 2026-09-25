@@ -1,0 +1,120 @@
+From cf7449760117a55a90515558d42f7d9d8c9cf672 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 13:32:54 +0900
+Subject: [PATCH] LunarisDolby: Release unused effect clients
+
+---
+ .../lunaris/dolby/BootCompletedReceiver.kt    |  3 --
+ .../lunaris/dolby/provider/SummaryProvider.kt | 31 ++++++++++---------
+ .../service/DolbyNotificationListener.kt      |  3 ++
+ .../lunaris/dolby/tile/DolbyTileService.kt    | 10 +++++-
+ 4 files changed, 28 insertions(+), 19 deletions(-)
+
+diff --git a/LunarisDolby/src/org/lunaris/dolby/BootCompletedReceiver.kt b/LunarisDolby/src/org/lunaris/dolby/BootCompletedReceiver.kt
+index 1593ddb..7a8fb75 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/BootCompletedReceiver.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/BootCompletedReceiver.kt
+@@ -11,7 +11,6 @@ import android.content.Context
+ import android.content.Intent
+ import android.provider.Settings
+ import android.util.Log
+-import org.lunaris.dolby.data.DolbyRepository
+ import org.lunaris.dolby.service.AppProfileMonitorService
+ import org.lunaris.dolby.service.DolbyEffectService
+ import org.lunaris.dolby.service.DolbyNotificationListener
+@@ -24,8 +23,6 @@ class BootCompletedReceiver : BroadcastReceiver() {
+             Intent.ACTION_LOCKED_BOOT_COMPLETED,
+             Intent.ACTION_BOOT_COMPLETED -> {
+                 try {
+-                    val repository = DolbyRepository(context)
+-                    
+                     DolbyEffectService.start(context)
+                     
+                     val prefs = context.getSharedPreferences("dolby_prefs", Context.MODE_PRIVATE)
+diff --git a/LunarisDolby/src/org/lunaris/dolby/provider/SummaryProvider.kt b/LunarisDolby/src/org/lunaris/dolby/provider/SummaryProvider.kt
+index bac9b1c..3b73c72 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/provider/SummaryProvider.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/provider/SummaryProvider.kt
+@@ -57,21 +57,22 @@ class SummaryProvider : ContentProvider() {
+     private fun getDolbySummary(): String {
+         val context = context ?: return ""
+         val repository = DolbyRepository(context)
+-        
+-        if (!repository.getDolbyEnabled()) {
+-            return context.getString(R.string.dolby_off)
+-        }
+-        
+-        val profile = repository.getCurrentProfile()
+-        val profiles = context.resources.getStringArray(R.array.dolby_profile_entries)
+-        val profileValues = context.resources.getStringArray(R.array.dolby_profile_values)
+-        
+-        return try {
+-            val index = profileValues.indexOf(profile.toString())
+-            val profileName = if (index != -1) profiles[index] else context.getString(R.string.dolby_unknown)
+-            context.getString(R.string.dolby_on_with_profile, profileName)
+-        } catch (e: Exception) {
+-            context.getString(R.string.dolby_on)
++        return repository.use {
++            if (!it.getDolbyEnabled()) {
++                return@use context.getString(R.string.dolby_off)
++            }
++
++            val profile = it.getCurrentProfile()
++            val profiles = context.resources.getStringArray(R.array.dolby_profile_entries)
++            val profileValues = context.resources.getStringArray(R.array.dolby_profile_values)
++
++            try {
++                val index = profileValues.indexOf(profile.toString())
++                val profileName = if (index != -1) profiles[index] else context.getString(R.string.dolby_unknown)
++                context.getString(R.string.dolby_on_with_profile, profileName)
++            } catch (e: Exception) {
++                context.getString(R.string.dolby_on)
++            }
+         }
+     }
+ }
+diff --git a/LunarisDolby/src/org/lunaris/dolby/service/DolbyNotificationListener.kt b/LunarisDolby/src/org/lunaris/dolby/service/DolbyNotificationListener.kt
+index 61327c5..f5bddbd 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/service/DolbyNotificationListener.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/service/DolbyNotificationListener.kt
+@@ -95,6 +95,9 @@ class DolbyNotificationListener : NotificationListenerService() {
+ 
+     override fun onDestroy() {
+         super.onDestroy()
++        if (::dolbyRepository.isInitialized) {
++            dolbyRepository.close()
++        }
+         DolbyConstants.dlog(TAG, "NotificationListener destroyed")
+     }
+ 
+diff --git a/LunarisDolby/src/org/lunaris/dolby/tile/DolbyTileService.kt b/LunarisDolby/src/org/lunaris/dolby/tile/DolbyTileService.kt
+index ceef084..c2a9844 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/tile/DolbyTileService.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/tile/DolbyTileService.kt
+@@ -13,7 +13,8 @@ import org.lunaris.dolby.data.DolbyRepository
+ 
+ class DolbyTileService : TileService() {
+ 
+-    private val repository by lazy { DolbyRepository(applicationContext) }
++    private val repositoryDelegate = lazy { DolbyRepository(applicationContext) }
++    private val repository by repositoryDelegate
+ 
+     override fun onStartListening() {
+         super.onStartListening()
+@@ -27,6 +28,13 @@ class DolbyTileService : TileService() {
+         updateTile()
+     }
+ 
++    override fun onDestroy() {
++        if (repositoryDelegate.isInitialized()) {
++            repository.close()
++        }
++        super.onDestroy()
++    }
++
+     private fun updateTile() {
+         qsTile?.apply {
+             val enabled = repository.getDolbyEnabled()
+-- 
+2.43.0
+

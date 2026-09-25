@@ -1,0 +1,366 @@
+From ca46b9068086085ff2401e546743393afe40a580 Mon Sep 17 00:00:00 2001
+From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
+Date: Fri, 21 Aug 2026 13:32:49 +0900
+Subject: [PATCH] LunarisDolby: Disable processing on external audio routes
+
+---
+ LunarisDolby/AndroidManifest.xml              |  3 +-
+ LunarisDolby/res/values-ja/strings.xml        |  5 ++
+ LunarisDolby/res/values/strings.xml           |  2 +
+ .../src/org/lunaris/dolby/DolbyConstants.kt   |  1 +
+ .../lunaris/dolby/data/DeviceStateManager.kt  |  6 ++-
+ .../org/lunaris/dolby/data/DolbyRepository.kt | 51 +++++++++++++++++--
+ .../dolby/service/DolbyEffectService.kt       | 36 +++++++++----
+ .../components/AppProfileSettingsComponent.kt | 47 +++++++++++++++++
+ 8 files changed, 134 insertions(+), 17 deletions(-)
+ create mode 100644 LunarisDolby/res/values-ja/strings.xml
+
+diff --git a/LunarisDolby/AndroidManifest.xml b/LunarisDolby/AndroidManifest.xml
+index 4ca9dff..165a49a 100644
+--- a/LunarisDolby/AndroidManifest.xml
++++ b/LunarisDolby/AndroidManifest.xml
+@@ -11,6 +11,7 @@
+     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
++    <uses-permission android:name="android.permission.QUERY_AUDIO_STATE" />
+     <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE" />
+ 
+     <application
+@@ -104,4 +105,4 @@
+             android:stopWithTask="false" />
+ 
+     </application>
+-</manifest>
+\ No newline at end of file
++</manifest>
+diff --git a/LunarisDolby/res/values-ja/strings.xml b/LunarisDolby/res/values-ja/strings.xml
+new file mode 100644
+index 0000000..9624e18
+--- /dev/null
++++ b/LunarisDolby/res/values-ja/strings.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="auto_disable_non_speaker_title">外部音声出力では無効化</string>
++    <string name="auto_disable_non_speaker_summary">Bluetooth、有線、USBなど内蔵スピーカー以外の出力ではDolbyを自動的に無効化します</string>
++</resources>
+diff --git a/LunarisDolby/res/values/strings.xml b/LunarisDolby/res/values/strings.xml
+index 37cf3de..8e29c1f 100644
+--- a/LunarisDolby/res/values/strings.xml
++++ b/LunarisDolby/res/values/strings.xml
+@@ -130,6 +130,8 @@
+     <string name="app_profiles_change">Change</string>
+     <string name="app_profiles_auto_switch">Auto-switch profiles</string>
+     <string name="app_profiles_show_toasts">Show toasts</string>
++    <string name="auto_disable_non_speaker_title">Disable on external audio</string>
++    <string name="auto_disable_non_speaker_summary">Automatically disable Dolby for Bluetooth, wired, USB, and other non-speaker outputs</string>
+ 
+     <!-- Preset Import/Export -->
+     <string name="preset_import_export">Import/Export Presets</string>
+diff --git a/LunarisDolby/src/org/lunaris/dolby/DolbyConstants.kt b/LunarisDolby/src/org/lunaris/dolby/DolbyConstants.kt
+index cccd0fc..7a7d962 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/DolbyConstants.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/DolbyConstants.kt
+@@ -31,6 +31,7 @@ object DolbyConstants {
+     const val PREF_PRESETS_MIGRATED = "presets_migrated"
+     const val PREF_BAND_MODE = "dolby_band_mode"
+     const val PREF_DEVICE_STATE_MEMORY = "device_state_memory_enabled"
++    const val PREF_AUTO_DISABLE_NON_SPEAKER = "auto_disable_non_speaker"
+     
+     const val PREF_FILE_PRESETS = "presets"
+ 
+diff --git a/LunarisDolby/src/org/lunaris/dolby/data/DeviceStateManager.kt b/LunarisDolby/src/org/lunaris/dolby/data/DeviceStateManager.kt
+index b711d5c..8adc7f4 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/data/DeviceStateManager.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/data/DeviceStateManager.kt
+@@ -58,7 +58,7 @@ class DeviceStateManager(private val context: Context) {
+ 
+         editor.putInt(KEY_VERSION, SNAPSHOT_VERSION)
+ 
+-        editor.putBoolean(KEY_DOLBY_ENABLED, repository.getDolbyEnabled())
++        editor.putBoolean(KEY_DOLBY_ENABLED, repository.getDolbyUserEnabled())
+         editor.putInt(KEY_PROFILE, profile)
+ 
+         editor.putInt(KEY_IEQ, repository.getIeqPreset(profile))
+@@ -115,7 +115,9 @@ class DeviceStateManager(private val context: Context) {
+             val enabled = prefs.getBoolean(KEY_DOLBY_ENABLED, true)
+             val profile = prefs.getInt(KEY_PROFILE, 0)
+ 
+-            repository.setDolbyEnabled(enabled)
++            if (!repository.isAutoDisableNonSpeakerEnabled() || deviceKey == "builtin_speaker") {
++                repository.setDolbyEnabled(enabled)
++            }
+             repository.setCurrentProfile(profile)
+ 
+             val storedBandCount = prefs.getInt(KEY_EQ_BAND_COUNT, -1)
+diff --git a/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt b/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
+index 1263e8e..9704126 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/data/DolbyRepository.kt
+@@ -37,6 +37,20 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+     val volumeLevelerSupported = context.resources.getBoolean(R.bool.dolby_volume_leveler_supported)
+     
+     private var isReleased = false
++
++    private val routeChangedListener = AudioManager.OnDevicesForAttributesChangedListener { _, _ ->
++        if (!isReleased) {
++            applySavedState()
++        }
++    }
++
++    init {
++        audioManager.addOnDevicesForAttributesChangedListener(
++            ATTRIBUTES_MEDIA,
++            context.mainExecutor,
++            routeChangedListener
++        )
++    }
+     
+     private var cachedPresets: List<EqualizerPreset>? = null
+     private val presetCacheLock = Any()
+@@ -121,8 +135,9 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+     }
+ 
+     fun applySavedState() {
+-    checkEffect()
+-        val enabled = defaultPrefs.getBoolean(DolbyConstants.PREF_ENABLE, false)
++        checkEffect()
++        val enabled = defaultPrefs.getBoolean(DolbyConstants.PREF_ENABLE, false) &&
++            !isAutoDisabledForCurrentRoute()
+         dolbyEffect.dsOn = enabled
+         if (enabled) {
+             restoreSavedProfileIfNeeded()
+@@ -131,8 +146,7 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+ 
+     private fun checkIsOnSpeaker(): Boolean {
+         return try {
+-            val device = audioManager.getDevicesForAttributes(ATTRIBUTES_MEDIA)[0]
+-            device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
++            isMediaRoutedToBuiltInSpeaker()
+         } catch (e: Exception) {
+             DolbyConstants.dlog(TAG, "Error checking speaker state: ${e.message}")
+             false
+@@ -154,18 +168,44 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+         }
+     }
+ 
++    fun getDolbyUserEnabled(): Boolean {
++        return defaultPrefs.getBoolean(DolbyConstants.PREF_ENABLE, false)
++    }
++
+     fun setDolbyEnabled(enabled: Boolean) {
+         if (isReleased) return
+         
+         try {
+             checkEffect()
+-            dolbyEffect.dsOn = enabled
+             defaultPrefs.edit().putBoolean(DolbyConstants.PREF_ENABLE, enabled).apply()
++            dolbyEffect.dsOn = enabled && !isAutoDisabledForCurrentRoute()
+         } catch (e: Exception) {
+             DolbyConstants.dlog(TAG, "Error setting Dolby enabled: ${e.message}")
+         }
+     }
+ 
++    fun isAutoDisabledForCurrentRoute(): Boolean {
++        return isAutoDisableNonSpeakerEnabled() &&
++            !isMediaRoutedToBuiltInSpeaker()
++    }
++
++    fun isAutoDisableNonSpeakerEnabled(): Boolean {
++        return defaultPrefs.getBoolean(DolbyConstants.PREF_AUTO_DISABLE_NON_SPEAKER, true)
++    }
++
++    private fun isMediaRoutedToBuiltInSpeaker(): Boolean {
++        return try {
++            val routedDevices = audioManager.getDevicesForAttributes(ATTRIBUTES_MEDIA)
++            routedDevices.isNotEmpty() && routedDevices.all { device ->
++                device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER ||
++                    device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE
++            }
++        } catch (e: Exception) {
++            DolbyConstants.dlog(TAG, "Unable to determine media route; preserving Dolby state")
++            true
++        }
++    }
++
+     fun getCurrentProfile(): Int {
+         return try {
+             checkEffect()
+@@ -898,6 +938,7 @@ class DolbyRepository(private val context: Context) : AutoCloseable {
+             DolbyConstants.dlog(TAG, "Releasing repository resources")
+             isReleased = true
+             try {
++                audioManager.removeOnDevicesForAttributesChangedListener(routeChangedListener)
+                 dolbyEffect.release()
+             } catch (e: Exception) {
+                 DolbyConstants.dlog(TAG, "Error releasing effect: ${e.message}")
+diff --git a/LunarisDolby/src/org/lunaris/dolby/service/DolbyEffectService.kt b/LunarisDolby/src/org/lunaris/dolby/service/DolbyEffectService.kt
+index 6e811fc..d52d039 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/service/DolbyEffectService.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/service/DolbyEffectService.kt
+@@ -56,7 +56,7 @@ class DolbyEffectService : Service() {
+         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>?) {
+             val isActive = configs?.any { it.isActive } == true
+             if (isActive) {
+-                repository.applySavedState()
++                applyRoutePolicy()
+             }
+         }
+     }
+@@ -71,12 +71,12 @@ class DolbyEffectService : Service() {
+             if (isDeviceStateMemoryEnabled) {
+                 val key = deviceStateManager.deviceKey(currentDevice)
+                 val restored = deviceStateManager.restoreSnapshot(key, repository)
+-                if (!restored) repository.applySavedState()
++                if (!restored) applyRoutePolicy()
+             } else {
+-                repository.applySavedState()
++                applyRoutePolicy()
+             }
+         } else {
+-            repository.applySavedState()
++            applyRoutePolicy()
+         }
+ 
+         audioManager.registerAudioDeviceCallback(audioDeviceCallback, handler)
+@@ -103,18 +103,33 @@ class DolbyEffectService : Service() {
+                 val restored = deviceStateManager.restoreSnapshot(newKey, repository)
+                 if (!restored) {
+                     Log.d(TAG, "First time device, applying saved state as base")
+-                    repository.applySavedState()
++                    applyRoutePolicy()
+                 }
+             } else {
+                 Log.d(TAG, "Device state memory disabled, applying saved state")
+-                repository.applySavedState()
++                applyRoutePolicy()
+             }
+             previousActiveDevice = newDevice
+         } else {
+             repository.updateSpeakerState()
+-            repository.applySavedState()
++            applyRoutePolicy()
+             previousActiveDevice = null
+         }
++
++        scheduleRoutePolicy()
++    }
++
++    private val applyRoutePolicyRunnable = Runnable { applyRoutePolicy() }
++
++    private fun scheduleRoutePolicy() {
++        handler.removeCallbacks(applyRoutePolicyRunnable)
++        handler.postDelayed(applyRoutePolicyRunnable, ROUTE_SETTLE_DELAY_MS)
++    }
++
++    private fun applyRoutePolicy() {
++        val forceDisabled = repository.isAutoDisabledForCurrentRoute()
++        Log.d(TAG, "Applying route policy: forceDisabled=$forceDisabled")
++        repository.applySavedState()
+     }
+ 
+     private fun getCurrentOutputDevice(): AudioDeviceInfo? {
+@@ -141,7 +156,7 @@ class DolbyEffectService : Service() {
+     }
+ 
+     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+-        repository.applySavedState()
++        applyRoutePolicy()
+         return START_STICKY
+     }
+ 
+@@ -156,6 +171,9 @@ class DolbyEffectService : Service() {
+         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+         audioManager.unregisterAudioPlaybackCallback(playbackCallback)
+         handler.removeCallbacksAndMessages(null)
++        if (::repository.isInitialized) {
++            repository.close()
++        }
+         Log.d(TAG, "Dolby effect service destroyed")
+     }
+ 
+@@ -163,7 +181,7 @@ class DolbyEffectService : Service() {
+ 
+     companion object {
+         private const val TAG = "DolbyEffectService"
+-
++        private const val ROUTE_SETTLE_DELAY_MS = 300L
+         fun start(context: Context) {
+             val intent = Intent(context, DolbyEffectService::class.java)
+             context.startService(intent)
+diff --git a/LunarisDolby/src/org/lunaris/dolby/ui/components/AppProfileSettingsComponent.kt b/LunarisDolby/src/org/lunaris/dolby/ui/components/AppProfileSettingsComponent.kt
+index 8d3be1b..873d435 100644
+--- a/LunarisDolby/src/org/lunaris/dolby/ui/components/AppProfileSettingsComponent.kt
++++ b/LunarisDolby/src/org/lunaris/dolby/ui/components/AppProfileSettingsComponent.kt
+@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
+ import androidx.compose.ui.unit.dp
+ import org.lunaris.dolby.R
+ import org.lunaris.dolby.service.AppProfileMonitorService
++import org.lunaris.dolby.service.DolbyEffectService
+ import org.lunaris.dolby.DolbyConstants
+ 
+ @OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@@ -41,6 +42,9 @@ fun AppProfileSettingsCard(
+     var isDeviceStateMemoryEnabled by remember {
+         mutableStateOf(prefs.getBoolean(DolbyConstants.PREF_DEVICE_STATE_MEMORY, false))
+     }
++    var autoDisableNonSpeaker by remember {
++        mutableStateOf(prefs.getBoolean(DolbyConstants.PREF_AUTO_DISABLE_NON_SPEAKER, true))
++    }
+     var showToasts by remember {
+         mutableStateOf(prefs.getBoolean("app_profile_show_toasts", true))
+     }
+@@ -275,6 +279,49 @@ fun AppProfileSettingsCard(
+                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+             )
+ 
++            Row(
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .padding(top = 8.dp),
++                horizontalArrangement = Arrangement.SpaceBetween,
++                verticalAlignment = Alignment.CenterVertically
++            ) {
++                Column(modifier = Modifier.weight(1f)) {
++                    Text(
++                        text = stringResource(R.string.auto_disable_non_speaker_title),
++                        style = MaterialTheme.typography.bodyLarge,
++                        fontWeight = FontWeight.Medium,
++                        color = MaterialTheme.colorScheme.onSurface
++                    )
++                    Text(
++                        text = stringResource(R.string.auto_disable_non_speaker_summary),
++                        style = MaterialTheme.typography.bodySmall,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        modifier = Modifier.padding(top = 2.dp)
++                    )
++                }
++
++                Spacer(modifier = Modifier.width(12.dp))
++
++                Switch(
++                    checked = autoDisableNonSpeaker,
++                    onCheckedChange = { enabled ->
++                        autoDisableNonSpeaker = enabled
++                        prefs.edit()
++                            .putBoolean(DolbyConstants.PREF_AUTO_DISABLE_NON_SPEAKER, enabled)
++                            .apply()
++                        DolbyEffectService.start(context)
++                    }
++                )
++            }
++
++            Spacer(modifier = Modifier.height(12.dp))
++
++            HorizontalDivider(
++                modifier = Modifier.padding(vertical = 4.dp),
++                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
++            )
++
+             Row(
+                 modifier = Modifier
+                     .fillMaxWidth()
+-- 
+2.43.0
+
