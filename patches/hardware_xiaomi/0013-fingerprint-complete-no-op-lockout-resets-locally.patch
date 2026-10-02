@@ -1,47 +1,72 @@
-From 8252ff03fe3aee214c38455559d02e4fff1a3391 Mon Sep 17 00:00:00 2001
-From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
-Date: Sun, 16 Aug 2026 16:33:09 +0900
-Subject: [PATCH 13/14] fingerprint: complete no-op lockout resets locally
+From 1538173c1a2d2f64493494aa4357dbb9be8fdf93 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Fri, 2 Oct 2026 13:51:20 +0800
+Subject: [PATCH] fingerprint: validate vendor lockout resets before completing
+ locally
 
+---
+ aidl/fingerprint/Session.cpp | 45 ++++++++++++++++++++++++++++++++++--
+ aidl/fingerprint/Session.h   |  6 +++++
+ 2 files changed, 49 insertions(+), 2 deletions(-)
 
 diff --git a/aidl/fingerprint/Session.cpp b/aidl/fingerprint/Session.cpp
-index c8101bd..ebaa6df 100644
+index c8101bd..3dca4ae 100644
 --- a/aidl/fingerprint/Session.cpp
 +++ b/aidl/fingerprint/Session.cpp
-@@ -165,17 +165,38 @@ ndk::ScopedAStatus Session::invalidateAuthenticatorId() {
+@@ -61,6 +61,7 @@ ndk::ScopedAStatus Session::revokeChallenge(int64_t challenge) {
+ 
+ ndk::ScopedAStatus Session::enroll(const HardwareAuthToken& hat,
+                                    std::shared_ptr<ICancellationSignal>* out) {
++    invalidateLockoutReset();
+     hw_auth_token_t authToken;
+     translate(hat, authToken);
+     if (mUdfpsHandler) {
+@@ -85,6 +86,7 @@ ndk::ScopedAStatus Session::enroll(const HardwareAuthToken& hat,
+ 
+ ndk::ScopedAStatus Session::authenticate(int64_t operationId,
+                                          std::shared_ptr<ICancellationSignal>* out) {
++    invalidateLockoutReset();
+     checkSensorLockout();
+     if (mUdfpsHandler) {
+         mUdfpsHandler->onAuthenticateStarted();
+@@ -165,17 +167,43 @@ ndk::ScopedAStatus Session::invalidateAuthenticatorId() {
  
  ndk::ScopedAStatus Session::resetLockout(const HardwareAuthToken& hat) {
  #ifdef IMPL_V2
-+    if (mLockoutTracker.getMode() == LockoutTracker::LockoutMode::kNone) {
-+        ALOGI("resetLockout: already unlocked, completing without a vendor request");
-+        mLockoutTracker.reset(true);
-+        if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
-+
-+        // ISession methods run on binder threads, while ISessionCallback must be invoked from a
-+        // non-binder thread. Qualcomm's backend does not emit a completion callback when it is
-+        // already unlocked, so complete this no-op request ourselves.
-+        auto cb = mCb;
-+        std::thread([cb]() {
-+            auto status = cb->onLockoutCleared();
-+            if (!status.isOk()) {
-+                ALOGE("Failed to report no-op lockout reset: %s", status.getDescription().c_str());
-+            }
-+        }).detach();
-+        return ndk::ScopedAStatus::ok();
-+    }
-+
-+    if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
++    const bool wasLocallyUnlocked =
++            mLockoutTracker.getMode() == LockoutTracker::LockoutMode::kNone;
++    auto completion = std::make_shared<std::atomic_bool>(false);
++    std::atomic_store(&mLockoutResetCompletion, completion);
 +
      hw_auth_token_t authToken;
      translate(hat, authToken);
  
++    // The local tracker is not the vendor/TEE lock state. Always ask the
++    // backend to validate the HAT and reset its own counter, even in kNone.
      int resetResult = mDevice->reset_lockout(mDevice, &authToken);
      if (resetResult != 0) {
++        completion->store(true);
          ALOGE("Failed to reset lockout: %d", resetResult);
 +        return ndk::ScopedAStatus::fromServiceSpecificError(resetResult);
      }
 -#endif
--
++    if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
+ 
++    // QCOM can return success without a callback for an already-unlocked
++    // backend. Complete that case only after the vendor call succeeds; use
++    // the same token as notify() so synchronous or late callbacks cannot
++    // report the same request twice. The worker owns no Session pointer.
++    if (wasLocallyUnlocked && !completion->load()) {
++        mLockoutTracker.reset(true);
++        auto cb = mCb;
++        std::thread([cb, completion] {
++            if (completion->exchange(true)) return;
++            auto status = cb->onLockoutCleared();
++            if (!status.isOk()) {
++                ALOGE("Failed to report lockout reset: %s", status.getDescription().c_str());
++            }
++        }).detach();
++    }
 +#else
      clearLockout(true);
      if (mIsLockoutTimerStarted) mIsLockoutTimerAborted = true;
@@ -49,3 +74,77 @@ index c8101bd..ebaa6df 100644
  
      return ndk::ScopedAStatus::ok();
  }
+@@ -258,6 +286,7 @@ ndk::ScopedAStatus Session::cancel() {
+ }
+ 
+ ndk::ScopedAStatus Session::close() {
++    invalidateLockoutReset();
+     mClosed = true;
+     mCb->onSessionClosed();
+     AIBinder_DeathRecipient_delete(mDeathRecipient);
+@@ -357,6 +386,12 @@ void Session::clearLockout(bool clearAttemptCounter) {
+     mCb->onLockoutCleared();
+ }
+ 
++void Session::invalidateLockoutReset() {
++    auto completion = std::atomic_exchange(&mLockoutResetCompletion,
++                                          std::shared_ptr<std::atomic_bool>{});
++    if (completion) completion->store(true);
++}
++
+ void Session::startLockoutTimer(int64_t timeout) {
+     std::function<void()> action = std::bind(&Session::lockoutTimerExpired, this);
+     std::thread([timeout, action]() {
+@@ -378,6 +413,8 @@ void Session::notify(const fingerprint_msg_t* msg) {
+     // const uint64_t devId = reinterpret_cast<uint64_t>(mDevice);
+     switch (msg->type) {
+         case FINGERPRINT_ERROR: {
++            auto completion = std::atomic_load(&mLockoutResetCompletion);
++            if (completion) completion->store(true);
+             int32_t vendorCode = 0;
+             Error result = VendorErrorFilter(msg->data.error, &vendorCode);
+             ALOGD("onError(%hhd, %d)", result, vendorCode);
+@@ -504,7 +541,11 @@ void Session::notify(const fingerprint_msg_t* msg) {
+         } break;
+         case FINGERPRINT_RESET_LOCKOUT: {
+             ALOGD("onLockoutCleared");
+-            clearLockout(true);
++            auto completion = std::atomic_load(&mLockoutResetCompletion);
++            mLockoutTracker.reset(true);
++            if (!completion || !completion->exchange(true)) {
++                mCb->onLockoutCleared();
++            }
+         } break;
+ #endif
+     }
+diff --git a/aidl/fingerprint/Session.h b/aidl/fingerprint/Session.h
+index 025abe6..9e7a4fc 100644
+--- a/aidl/fingerprint/Session.h
++++ b/aidl/fingerprint/Session.h
+@@ -7,6 +7,8 @@
+ #pragma once
+ #define LOG_TAG "android.hardware.biometrics.fingerprint-service.xiaomi"
+ 
++#include <atomic>
++
+ #include <aidl/android/hardware/biometrics/fingerprint/BnSession.h>
+ #include <aidl/android/hardware/biometrics/fingerprint/ISessionCallback.h>
+ #include <android/log.h>
+@@ -80,6 +82,7 @@ class Session : public BnSession {
+ 
+     bool checkSensorLockout();
+     void clearLockout(bool clearAttemptCounter);
++    void invalidateLockoutReset();
+     void startLockoutTimer(int64_t timeout);
+     void lockoutTimerExpired();
+ 
+@@ -99,6 +102,9 @@ class Session : public BnSession {
+     AIBinder_DeathRecipient* mDeathRecipient;
+ 
+     UdfpsHandler* mUdfpsHandler;
++
++    // Shared with fallback callback workers; never capture a Session pointer.
++    std::shared_ptr<std::atomic_bool> mLockoutResetCompletion;
+ };
+ 
+ }  // namespace aidl::android::hardware::biometrics::fingerprint

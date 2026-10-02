@@ -1,37 +1,27 @@
-From 7bd208fb9a700186488f86ad81182ffd46f63844 Mon Sep 17 00:00:00 2001
-From: turbo-boo <59400127+turbo-boo@users.noreply.github.com>
-Date: Fri, 10 Jul 2026 08:06:46 +0900
-Subject: [PATCH 01/14] fingerprint: support Xiaomi under-display backends
+From b4d09cb99c02dc8ac77bafa551ad593717ec9337 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Fri, 2 Oct 2026 13:49:40 +0800
+Subject: [PATCH] fingerprint: support Xiaomi under-display backends
 
+---
+ aidl/fingerprint/Fingerprint.cpp                              | 3 ++-
+ .../android.hardware.biometrics.fingerprint-service.xiaomi.rc | 4 ++--
+ 2 files changed, 4 insertions(+), 3 deletions(-)
 
-diff --git a/aidl/fingerprint/Android.bp b/aidl/fingerprint/Android.bp
-index 5368db6..3d785ff 100644
---- a/aidl/fingerprint/Android.bp
-+++ b/aidl/fingerprint/Android.bp
-@@ -39,7 +39,6 @@ xiaomi_hardware_biometrics_config_default {
- 
- cc_binary {
-     name: "android.hardware.biometrics.fingerprint-service.xiaomi",
--    enabled: false, // Using prebuilt from vendor/xiaomi/sm8750-common instead
-     defaults: ["xiaomi_hardware_biometrics_config_default"],
-     relative_install_path: "hw",
-     init_rc: ["android.hardware.biometrics.fingerprint-service.xiaomi.rc"],
 diff --git a/aidl/fingerprint/Fingerprint.cpp b/aidl/fingerprint/Fingerprint.cpp
-index 2edcf97..4465761 100644
+index cf98a29..35959e0 100644
 --- a/aidl/fingerprint/Fingerprint.cpp
 +++ b/aidl/fingerprint/Fingerprint.cpp
-@@ -33,8 +33,9 @@ typedef struct fingerprint_hal {
+@@ -33,7 +33,8 @@ typedef struct fingerprint_hal {
  } fingerprint_hal_t;
  
  static const fingerprint_hal_t kModules[] = {
 -        {"fortsense"},  {"fpc"},         {"fpc_fod"}, {"goodix"}, {"goodix:gf_fingerprint"},
--        {"goodix_fod"}, {"goodix_fod6"}, {"silead"},  {"syna"},
-+        {"qcom_us"},    {"goodix_us"},  {"fortsense"}, {"fpc"},       {"fpc_fod"},
-+        {"goodix"},     {"goodix:gf_fingerprint"},      {"goodix_fod"}, {"goodix_fod6"},
-+        {"silead"},     {"syna"},
++        {"qcom_us"},    {"goodix_us"},   {"fortsense"}, {"fpc"}, {"fpc_fod"},
++        {"goodix"},     {"goodix:gf_fingerprint"},
+         {"goodix_fod"}, {"goodix_fod6"}, {"jiiov"},   {"silead"}, {"syna"},
  };
  
- }  // namespace
 diff --git a/aidl/fingerprint/android.hardware.biometrics.fingerprint-service.xiaomi.rc b/aidl/fingerprint/android.hardware.biometrics.fingerprint-service.xiaomi.rc
 index 89d1c3e..6f63697 100644
 --- a/aidl/fingerprint/android.hardware.biometrics.fingerprint-service.xiaomi.rc
